@@ -58,9 +58,16 @@ def smape(y_true, y_pred):
 
 def compute_metrics(df, actual_col, pred_col, groupby=None):
     data = df.dropna(subset=[actual_col, pred_col]).copy()
+    if data.empty:
+        return pd.DataFrame([{"R2": np.nan, "RMSE": np.nan, "MAE": np.nan, "MAPE%": np.nan, "sMAPE%": np.nan, "n": 0}])
+
     if groupby and groupby in data.columns:
         rows = []
         for g, part in data.groupby(groupby):
+            part = part.dropna(subset=[actual_col, pred_col])
+            if part.empty:
+                rows.append({groupby: g, "R2": np.nan, "RMSE": np.nan, "MAE": np.nan, "MAPE%": np.nan, "sMAPE%": np.nan, "n": 0})
+                continue
             yt = part[actual_col].values
             yp = part[pred_col].values
             rows.append({
@@ -94,9 +101,7 @@ def add_residuals(df, actual_col, pred_col):
     return out
 
 def identify_columns(df):
-    # Guess sensible defaults
     cols = list(df.columns)
-    lower = {c.lower(): c for c in cols}
 
     # Date-like
     date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower() or c.lower() in ["ds","timestamp"]]
@@ -126,16 +131,17 @@ def identify_columns(df):
     return {
         "date_col": date_col,
         "numeric_cols": numeric_cols,
-        "actual_candidates": actual_candidates or numeric_cols[:1],
+        "actual_candidates": actual_candidates or (numeric_cols[:1] if numeric_cols else []),
         "pred_candidates": pred_candidates or (numeric_cols[1:2] if len(numeric_cols) > 1 else numeric_cols[:1]),
         "model_col": model_col,
         "ticker_col": ticker_col
     }
 
-def line_overlay(df, x, y_cols, color=None, title=""):
+def line_overlay(df, x, y_cols, title=""):
     fig = go.Figure()
     for col in y_cols:
-        fig.add_trace(go.Scatter(x=df[x], y=df[col], mode="lines", name=col))
+        if col in df.columns:
+            fig.add_trace(go.Scatter(x=df[x], y=df[col], mode="lines", name=col))
     fig.update_layout(
         title=title,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -144,34 +150,59 @@ def line_overlay(df, x, y_cols, color=None, title=""):
     )
     return fig
 
-def scatter_parity(df, actual_col, pred_col, color=None, title="Predicted vs Actual"):
+def scatter_parity(df, actual_col, pred_col, title="Predicted vs Actual"):
+    # base scatter
     fig = px.scatter(
-        df, x=actual_col, y=pred_col, color=color,
-        opacity=0.85, trendline="ols", trendline_color_override="gray",
-        title=title, labels={actual_col:"Actual", pred_col:"Predicted"}
+        df, x=actual_col, y=pred_col,
+        opacity=0.85, title=title,
+        labels={actual_col:"Actual", pred_col:"Predicted"}
     )
-    # Parity line
-    min_val = float(np.nanmin([df[actual_col].min(), df[pred_col].min()]))
-    max_val = float(np.nanmax([df[actual_col].max(), df[pred_col].max()]))
-    fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val],
-                             mode="lines", name="Perfect fit", line=dict(dash="dash")))
+
+    # Parity line (y = x)
+    try:
+        min_val = float(np.nanmin([df[actual_col].min(), df[pred_col].min()]))
+        max_val = float(np.nanmax([df[actual_col].max(), df[pred_col].max()]))
+        fig.add_trace(go.Scatter(
+            x=[min_val, max_val], y=[min_val, max_val],
+            mode="lines", name="Perfect fit", line=dict(dash="dash")
+        ))
+    except Exception:
+        pass
+
+    # OLS fit line via numpy (no statsmodels needed)
+    clean = df[[actual_col, pred_col]].dropna()
+    if len(clean) >= 2:
+        x = clean[actual_col].values.astype(float)
+        y = clean[pred_col].values.astype(float)
+        try:
+            slope, intercept = np.polyfit(x, y, 1)
+            x_line = np.linspace(np.nanmin(x), np.nanmax(x), 100)
+            y_line = slope * x_line + intercept
+            fig.add_trace(go.Scatter(
+                x=x_line, y=y_line, mode="lines", name="OLS fit"
+            ))
+        except Exception:
+            pass
+
     fig.update_layout(margin=dict(t=50, r=10, l=10, b=10), height=420)
     return fig
 
-def residual_timeseries(df, x, residual_col="residual", color=None):
-    fig = px.line(df, x=x, y=residual_col, color=color, title="Residuals over Time")
+def residual_timeseries(df, x, residual_col="residual"):
+    fig = px.line(df, x=x, y=residual_col, title="Residuals over Time")
     fig.add_hline(y=0, line_dash="dash", opacity=0.7)
     fig.update_layout(margin=dict(t=50, r=10, l=10, b=10), height=350)
     return fig
 
-def residual_distribution(df, residual_col="residual", color=None):
-    fig = px.histogram(df, x=residual_col, color=color, nbins=40, marginal="box",
+def residual_distribution(df, residual_col="residual"):
+    fig = px.histogram(df, x=residual_col, nbins=40, marginal="box",
                        title="Residual Distribution", opacity=0.85)
     fig.update_layout(margin=dict(t=50, r=10, l=10, b=10), height=350)
     return fig
 
 def calibration_curve(df, actual_col, pred_col, bins=10, title="Calibration (Binned Means)"):
     tmp = df[[actual_col, pred_col]].dropna().copy()
+    if tmp.empty:
+        return go.Figure()
     tmp["bin"] = pd.qcut(tmp[pred_col], q=bins, duplicates="drop")
     grouped = tmp.groupby("bin").agg(actual_mean=(actual_col, "mean"),
                                      predicted_mean=(pred_col, "mean"),
@@ -188,7 +219,6 @@ def calibration_curve(df, actual_col, pred_col, bins=10, title="Calibration (Bin
     return fig
 
 def download_bytesio(df_dict, fname="export.xlsx"):
-    # Create an Excel with multiple sheets
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
         for sheet, frame in df_dict.items():
@@ -201,26 +231,22 @@ st.sidebar.header("📥 Data & Settings")
 
 # Provided file path (bundled in repo)
 provided_path = os.path.join("sample_data", "Actual_vs_Predicted_Results.xlsx")
-provided_df = None
 provided_sheets = []
 if os.path.exists(provided_path):
     try:
         xls = pd.ExcelFile(provided_path)
         provided_sheets = xls.sheet_names
-        # Don't load yet; we will allow user to pick sheet
     except Exception as e:
         st.sidebar.error(f"Failed to read provided Excel: {e}")
 
 source = st.sidebar.radio(
     "Data source",
-    ["Use provided file (Actual_vs_Predicted_Results.xlsx)"] + ["Upload file"]
-    if os.path.exists(provided_path) else ["Upload file"],
+    (["Use provided file (Actual_vs_Predicted_Results.xlsx)"] if os.path.exists(provided_path) else []) + ["Upload file"],
     index=0 if os.path.exists(provided_path) else 0
 )
 
 df = None
 if source.startswith("Use provided") and os.path.exists(provided_path):
-    # Let user choose sheet
     if len(provided_sheets) > 1:
         sheet = st.sidebar.selectbox("Choose Excel sheet", provided_sheets, index=0)
     else:
@@ -247,18 +273,22 @@ df.columns = [c.strip() for c in df.columns]
 det = identify_columns(df)
 
 with st.sidebar.expander("🔎 Column Mapping", expanded=True):
-    date_col = st.selectbox("Date/Time column (optional)", [None] + list(df.columns), index=(df.columns.tolist().index(det["date_col"]) + 1) if det["date_col"] in df.columns else 0)
-    # Allow user to manually pick Actual and one/more Pred columns
+    date_col = st.selectbox("Date/Time column (optional)", [None] + list(df.columns),
+                            index=(df.columns.tolist().index(det["date_col"]) + 1) if det["date_col"] in df.columns else 0)
     numeric_cols = det["numeric_cols"] if det["numeric_cols"] else []
     if not numeric_cols:
         st.sidebar.error("No numeric columns detected. Please verify your data.")
         st.stop()
     actual_default = det["actual_candidates"][0] if det["actual_candidates"] else numeric_cols[0]
-    actual_col = st.selectbox("Actual column", numeric_cols, index=(numeric_cols.index(actual_default) if actual_default in numeric_cols else 0))
+    actual_col = st.selectbox("Actual column", numeric_cols,
+                              index=(numeric_cols.index(actual_default) if actual_default in numeric_cols else 0))
     pred_defaults = det["pred_candidates"] if det["pred_candidates"] else (numeric_cols[1:2] if len(numeric_cols) > 1 else numeric_cols[:1])
-    pred_cols = st.multiselect("Predicted column(s)", numeric_cols, default=[c for c in pred_defaults if c in numeric_cols] or [numeric_cols[0]])
-    model_col = st.selectbox("Model column (optional)", [None] + list(df.columns), index=(df.columns.tolist().index(det["model_col"]) + 1) if det["model_col"] in df.columns else 0)
-    ticker_col = st.selectbox("Ticker column (optional)", [None] + list(df.columns), index=(df.columns.tolist().index(det["ticker_col"]) + 1) if det["ticker_col"] in df.columns else 0)
+    pred_cols = st.multiselect("Predicted column(s)", numeric_cols,
+                               default=[c for c in pred_defaults if c in numeric_cols] or [numeric_cols[0]])
+    model_col = st.selectbox("Model column (optional)", [None] + list(df.columns),
+                             index=(df.columns.tolist().index(det["model_col"]) + 1) if det["model_col"] in df.columns else 0)
+    ticker_col = st.selectbox("Ticker column (optional)", [None] + list(df.columns),
+                              index=(df.columns.tolist().index(det["ticker_col"]) + 1) if det["ticker_col"] in df.columns else 0)
 
 # Parse date if provided
 if date_col:
@@ -268,7 +298,6 @@ if date_col:
     else:
         st.sidebar.warning("Could not parse dates; displaying as plain text.")
 else:
-    # Create a row index for plotting
     idx_name = "row_index"
     while idx_name in df.columns:
         idx_name += "_"
@@ -302,7 +331,6 @@ focus_pred = st.selectbox("Focus predicted series", pred_cols, index=0)
 # If no model column but many predicted columns, create one for per-series grouping
 work = df.copy()
 if model_col is None and len(pred_cols) > 1:
-    # Melt predicted columns into rows with a synthetic model label
     melted = []
     for pc in pred_cols:
         tmp = work[[date_col, actual_col]].copy()
@@ -313,7 +341,6 @@ if model_col is None and len(pred_cols) > 1:
     model_col = "model"
     pred_col = "predicted"
 else:
-    # Use the focus column as 'predicted' for single-series deep dive
     pred_col = "predicted"
     work[pred_col] = work[focus_pred]
 
@@ -322,8 +349,8 @@ overall_metrics = compute_metrics(work, actual_col, pred_col, groupby=None)
 with st.container():
     st.subheader("Overview")
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    def fmt(x, nd=3): 
-        if pd.isna(x): 
+    def fmt(x, nd=3):
+        if pd.isna(x):
             return "—"
         return f"{x:.{nd}f}"
     with c1: st.metric("R²", fmt(overall_metrics["R2"].iloc[0], 3))
@@ -349,7 +376,7 @@ with tabs[0]:
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### Predicted vs Actual")
-        st.plotly_chart(scatter_parity(deep, actual_col, pred_col, color=None), use_container_width=True)
+        st.plotly_chart(scatter_parity(deep, actual_col, pred_col), use_container_width=True)
     with c2:
         st.markdown("#### Calibration")
         st.plotly_chart(calibration_curve(deep, actual_col, pred_col, bins=10), use_container_width=True)
@@ -397,7 +424,6 @@ with tabs[2]:
             mime="text/csv"
         )
     with colE2:
-        # Excel export with both residuals and metrics
         xls_bytes = download_bytesio({"Residuals": deep, "Metrics_by_Model": per_model if not per_model.empty else pd.DataFrame(), "Metrics_overall": overall})
         st.download_button(
             "⬇️ Download Metrics + Residuals (Excel)",
