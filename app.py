@@ -103,18 +103,14 @@ def add_residuals(df, actual_col, pred_col):
 def identify_columns(df):
     cols = list(df.columns)
 
-    # Date-like
     date_candidates = [c for c in cols if "date" in c.lower() or "time" in c.lower() or c.lower() in ["ds","timestamp"]]
     date_col = date_candidates[0] if date_candidates else None
 
-    # Numeric columns
     numeric_cols = [c for c in cols if str(df[c].dtype) in NUMERIC_DTYPES]
 
-    # Guess actual/pred
     actual_candidates = [c for c in numeric_cols if "actual" in c.lower() or c.lower() in ["y","y_true","target"]]
     pred_candidates = [c for c in numeric_cols if "pred" in c.lower() or "forecast" in c.lower() or c.lower() in ["yhat","y_pred"]]
 
-    # Optional
     model_col = None
     for c in cols:
         cl = c.lower()
@@ -151,14 +147,11 @@ def line_overlay(df, x, y_cols, title=""):
     return fig
 
 def scatter_parity(df, actual_col, pred_col, title="Predicted vs Actual"):
-    # base scatter
     fig = px.scatter(
         df, x=actual_col, y=pred_col,
         opacity=0.85, title=title,
         labels={actual_col:"Actual", pred_col:"Predicted"}
     )
-
-    # Parity line (y = x)
     try:
         min_val = float(np.nanmin([df[actual_col].min(), df[pred_col].min()]))
         max_val = float(np.nanmax([df[actual_col].max(), df[pred_col].max()]))
@@ -169,7 +162,6 @@ def scatter_parity(df, actual_col, pred_col, title="Predicted vs Actual"):
     except Exception:
         pass
 
-    # OLS fit line via numpy (no statsmodels needed)
     clean = df[[actual_col, pred_col]].dropna()
     if len(clean) >= 2:
         x = clean[actual_col].values.astype(float)
@@ -209,7 +201,6 @@ def calibration_curve(df, actual_col, pred_col, bins=10, title="Calibration (Bin
                                      n=("bin","size")).reset_index()
     fig = px.scatter(grouped, x="predicted_mean", y="actual_mean", size="n",
                      title=title, labels={"predicted_mean":"Predicted (bin mean)","actual_mean":"Actual (bin mean)"})
-    # parity
     both = grouped[["predicted_mean","actual_mean"]].values.flatten()
     if len(both):
         minv, maxv = float(np.nanmin(both)), float(np.nanmax(both))
@@ -229,7 +220,6 @@ def download_bytesio(df_dict, fname="export.xlsx"):
 # ------------- Sidebar: Data Input -------------
 st.sidebar.header("📥 Data & Settings")
 
-# Provided file path (bundled in repo)
 provided_path = os.path.join("sample_data", "Actual_vs_Predicted_Results.xlsx")
 provided_sheets = []
 if os.path.exists(provided_path):
@@ -266,10 +256,7 @@ if df is None or df.empty:
     st.error("No data loaded. Please use the provided Excel or upload your file.")
     st.stop()
 
-# Clean column names (trim)
 df.columns = [c.strip() for c in df.columns]
-
-# Column detection & mapping
 det = identify_columns(df)
 
 with st.sidebar.expander("🔎 Column Mapping", expanded=True):
@@ -290,7 +277,6 @@ with st.sidebar.expander("🔎 Column Mapping", expanded=True):
     ticker_col = st.selectbox("Ticker column (optional)", [None] + list(df.columns),
                               index=(df.columns.tolist().index(det["ticker_col"]) + 1) if det["ticker_col"] in df.columns else 0)
 
-# Parse date if provided
 if date_col:
     parsed = to_datetime_safe(df[date_col])
     if parsed is not None:
@@ -304,14 +290,12 @@ else:
     df[idx_name] = np.arange(1, len(df) + 1)
     date_col = idx_name
 
-# Optional filters
 if ticker_col:
     tickers = sorted(df[ticker_col].dropna().astype(str).unique().tolist())
     selected_tickers = st.sidebar.multiselect("Filter tickers", tickers, default=tickers)
     if selected_tickers:
         df = df[df[ticker_col].astype(str).isin(selected_tickers)]
 
-# Date range filter
 if np.issubdtype(df[date_col].dtype, np.datetime64):
     min_d, max_d = df[date_col].min(), df[date_col].max()
     d1, d2 = st.sidebar.date_input("Date range", value=(min_d, max_d), min_value=min_d, max_value=max_d)
@@ -321,14 +305,12 @@ if np.issubdtype(df[date_col].dtype, np.datetime64):
 st.title("📈 Tesla Actual vs Predicted — Dashboard")
 st.caption("Analyze model performance with premium, presentation-ready visuals.")
 
-# Select which predicted series to focus on (for deep dive)
 if not pred_cols:
     st.error("Please select at least one predicted column.")
     st.stop()
 
 focus_pred = st.selectbox("Focus predicted series", pred_cols, index=0)
 
-# If no model column but many predicted columns, create one for per-series grouping
 work = df.copy()
 if model_col is None and len(pred_cols) > 1:
     melted = []
@@ -344,7 +326,6 @@ else:
     pred_col = "predicted"
     work[pred_col] = work[focus_pred]
 
-# Overall metrics (and per model if available)
 overall_metrics = compute_metrics(work, actual_col, pred_col, groupby=None)
 with st.container():
     st.subheader("Overview")
@@ -360,7 +341,6 @@ with st.container():
     with c5: st.metric("sMAPE %", fmt(overall_metrics["sMAPE%"].iloc[0], 2))
     with c6: st.metric("Observations", int(overall_metrics["n"].iloc[0]))
 
-# Time-series overlay (Actual vs Predicted)
 with st.container():
     st.markdown("### Actual vs Predicted (Time-Series)")
     overlay_df = work[[date_col, actual_col, pred_col]].rename(columns={date_col:"x"})
@@ -368,8 +348,7 @@ with st.container():
     st.plotly_chart(fig_ts, use_container_width=True)
     st.markdown('<div class="caption">Use the date range filter in the sidebar to zoom into specific periods.</div>', unsafe_allow_html=True)
 
-# Diagnostics tabs
-tabs = st.tabs(["🔬 Diagnostics", "📊 Compare Models", "🧾 Data & Export"])
+tabs = st.tabs(["🔬 Diagnostics", "📊 Compare Models", "🧾 Data & Export", "📚 Case Studies (IBR)"])
 
 with tabs[0]:
     deep = add_residuals(work[[date_col, actual_col, pred_col]], actual_col, pred_col)
@@ -397,7 +376,6 @@ with tabs[1]:
         st.dataframe(metrics_by_model, use_container_width=True)
         st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-        # Bar chart for RMSE by model
         fig_bar = px.bar(metrics_by_model, x=model_key, y="RMSE", text="RMSE", title="RMSE by Model")
         fig_bar.update_traces(texttemplate="%{text:.2f}", textposition="outside")
         fig_bar.update_layout(yaxis_title="RMSE", xaxis_title="", height=420, margin=dict(t=50, r=10, l=10, b=10))
@@ -409,7 +387,6 @@ with tabs[2]:
     st.markdown("#### Preview Data")
     st.dataframe(work.head(200), use_container_width=True)
 
-    # Build exports
     deep = add_residuals(work[[date_col, actual_col, pred_col]], actual_col, pred_col)
     per_model = compute_metrics(work, actual_col, pred_col, groupby="model") if "model" in work.columns else pd.DataFrame()
     overall = compute_metrics(work, actual_col, pred_col, groupby=None)
@@ -431,6 +408,124 @@ with tabs[2]:
             file_name="metrics_and_residuals.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+# ========== Case Studies (IBR) ==========
+CASE_STUDIES = [
+    {
+        "title": "AI-powered FX hedging pilot (Citi × Ant International)",
+        "org": "Citigroup & Ant International",
+        "year": 2025,
+        "domain": "FX risk management",
+        "link": "https://www.reuters.com/business/finance/citi-ant-international-pilot-ai-powered-fx-tool-clients-help-cut-hedging-costs-2025-07-18/",
+        "source": "Reuters",
+        "summary": "Pilot uses Ant International’s Falcon Time-Series Transformer with Citi’s Fixed FX Rates to lower hedging costs; reported ~30% cost reduction for a major Asian airline.",
+        "ibr_relevance": "Direct evidence of AI-driven time‑series improving hedging efficiency and reducing risk costs in live transactions."
+    },
+    {
+        "title": "Walmart’s ML-based demand forecasting platform",
+        "org": "Walmart Global Tech",
+        "year": 2020,
+        "domain": "Retail demand forecasting",
+        "link": "https://medium.com/walmartglobaltech/building-a-machine-learning-based-demand-forecasting-platform-d8c0841c1f07",
+        "source": "Walmart Global Tech (Medium)",
+        "summary": "Platform centralizes ML forecasting (GBM/RNN) to improve inventory positioning and operations at scale.",
+        "ibr_relevance": "Demonstrates operating margin impact from better forecasts (inventory/working capital) — transferable to financial planning quality."
+    },
+    {
+        "title": "AI-powered inventory during holidays",
+        "org": "Walmart Global Tech",
+        "year": 2023,
+        "domain": "Inventory forecasting",
+        "link": "https://tech.walmart.com/content/walmart-global-tech/en_us/blog/post/walmarts-ai-powered-inventory-system-brightens-the-holidays.html",
+        "source": "Walmart Tech Blog",
+        "summary": "Predictive analytics incorporates weather/demographics to place items strategically, reducing out-of-stock/overstock risk.",
+        "ibr_relevance": "Shows demand-forecast accuracy translating into tangible financial outcomes (lost sales reduction, markdown control)."
+    },
+    {
+        "title": "Uber Michelangelo: from predictive to generative AI",
+        "org": "Uber",
+        "year": 2024,
+        "domain": "Forecasting platforms",
+        "link": "https://www.uber.com/blog/from-predictive-to-generative-ai/",
+        "source": "Uber Engineering Blog",
+        "summary": "Describes evolution of Uber’s ML platform, supporting time series forecasting at scale and adding generative capabilities.",
+        "ibr_relevance": "Exemplar of MLOps for financial forecast pipelines: governance, monitoring, and developer velocity."
+    },
+    {
+        "title": "Predicting future earnings changes using ML",
+        "org": "NYU (SSRN)",
+        "year": 2022,
+        "domain": "Earnings forecasting",
+        "link": "https://www.stern.nyu.edu/sites/default/files/assets/documents/SSRN-id3741015.pdf",
+        "source": "SSRN working paper",
+        "summary": "Applies ML to rich financial statement data to predict one‑year‑ahead earnings direction; documents sizable predictive power.",
+        "ibr_relevance": "Academic evidence that ML improves corporate earnings forecasts relevant to valuation & risk models."
+    },
+    {
+        "title": "Forecasting bank capital ratios with Prophet",
+        "org": "Journal of Financial Innovation (AOF)",
+        "year": 2022,
+        "domain": "Bank risk & capital forecasting",
+        "link": "https://jfi-aof.org/index.php/jfi/article/view/4941",
+        "source": "Peer‑reviewed journal",
+        "summary": "Assesses Prophet for forecasting regulatory capital ratios; provides a benchmark for simple, explainable models.",
+        "ibr_relevance": "Ties forecast models to prudential metrics impacting risk appetite and supervisory dialogue."
+    },
+    {
+        "title": "MIT thesis: Demand Forecasting with ML",
+        "org": "MIT Center for Transportation & Logistics",
+        "year": 2024,
+        "domain": "Forecasting & finance impact",
+        "link": "https://ctl.mit.edu/sites/ctl.mit.edu/files/theses/Demand%20Forecasting%20with%20Machine%20Learning.pdf",
+        "source": "Academic thesis (MIT CTL)",
+        "summary": "Finds ML forecasting improves accuracy and yields better financial positions; highlights explainability trade‑offs.",
+        "ibr_relevance": "Connects accuracy gains to financial outcomes; flags model risk and interpretability — key to governance."
+    }
+]
+
+def render_case_card(item):
+    st.markdown(f"""
+    <div class="metric-card">
+        <h4 style="margin-bottom:0.25rem;">{item['title']}</h4>
+        <div class="small">{item['org']} • {item['year']} • {item['domain']}</div>
+        <div style="margin-top:0.5rem;">{item['summary']}</div>
+        <div class="small" style="margin-top:0.5rem;"><b>Relevance:</b> {item['ibr_relevance']}</div>
+        <div style="margin-top:0.6rem;"><a href="{item['link']}" target="_blank">Source: {item['source']}</a></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def case_studies_dataframe():
+    return pd.DataFrame(CASE_STUDIES)
+
+with tabs[3]:
+    st.markdown("#### Case Studies: AI in Financial Forecasting & Risk Management")
+    st.caption("Curated, publicly available cases connecting forecasting accuracy to risk reduction and decision quality.")
+
+    colA, colB = st.columns([2,1])
+    with colA:
+        q = st.text_input("Filter by keyword (org, domain, title)…", "")
+    with colB:
+        show_table = st.toggle("Show table view", value=False)
+
+    df_cs = case_studies_dataframe()
+    if q:
+        ql = q.lower()
+        df_cs = df_cs[df_cs.apply(lambda row: any(ql in str(v).lower() for v in row.values), axis=1)]
+
+    if not df_cs.empty:
+        if not show_table:
+            for _, row in df_cs.iterrows():
+                render_case_card(row.to_dict())
+        else:
+            st.dataframe(df_cs, use_container_width=True)
+        st.download_button(
+            "⬇️ Download Case Studies (CSV)",
+            data=df_cs.to_csv(index=False).encode("utf-8"),
+            file_name="case_studies_ibr.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No case studies matched your filter. Clear the filter to see all.")
 
 st.markdown("---")
 st.markdown('<span class="small">Tip: Map your columns in the sidebar. Add a <code>model</code> column or choose multiple predicted columns to compare models.</span>', unsafe_allow_html=True)
